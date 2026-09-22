@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { FontLoader } from "three/addons/loaders/FontLoader.js";
 import fontData from "three/examples/fonts/optimer_bold.typeface.json";
 import { smooth } from "./timeline.js";
+import { getDropletFall } from "./dropletMotion.js";
 
 const seed = (n) => {
   const v = Math.sin(n * 127.1 + 311.7) * 43758.5453;
@@ -57,7 +58,7 @@ function sampleGreeting() {
               x: offset + x + (seed(id + 3) - 0.5) * 0.45,
               y: 56 + lineIndex * 77 - y,
               radius: 1.7 + seed(id + 11) * 0.5,
-              release: 4.8 + seed(id + 29) * 1.35 + (edge ? 0 : 0.35),
+              release: 4.8 + seed(id + 29) * 0.85 + (edge ? 0 : 0.2),
               drift: (seed(id + 43) - 0.5) * 22,
               gather: 7.65 + seed(id + 57) * 0.3,
               phase: seed(id + 67) * Math.PI * 2,
@@ -120,15 +121,12 @@ export function createDropletGreeting(scene, coffee) {
         let radius = point.radius * scale * smooth(0, 0.45, t);
         const age = Math.max(0, t - point.release);
         if (age > 0) {
-          // Gravity and slight sideways drift release the same text droplets.
-          const flight = Math.sqrt(Math.max(0, floorY - ty) / 340);
-          const fallingAge = Math.min(age, flight);
-          x = tx + point.drift * fallingAge * scale;
-          y = Math.min(floorY, ty + 340 * fallingAge * fallingAge);
-          stretch =
-            1 + Math.min(1.15, fallingAge * 2.5) * (age < flight ? 1 : 0);
-          if (age >= flight) {
-            const settle = smooth(flight, flight + 0.45, age);
+          const fall = getDropletFall(floorY - ty, age, scale);
+          x = tx + point.drift * Math.min(age, fall.duration) * scale;
+          y = ty + fall.offset;
+          stretch = 1 + Math.min(1.8, fall.speed / (340 * scale));
+          if (fall.landed) {
+            const settle = smooth(fall.duration, fall.duration + 0.45, age);
             x = mix(x, puddleX + (tx - puddleX) * 0.83, settle);
             y = floorY + Math.sin(point.phase) * 2 * scale;
             stretch = 0.45;
@@ -144,7 +142,8 @@ export function createDropletGreeting(scene, coffee) {
           stretch = 1 + arc * 0.8;
         }
         dummy.position.set(x, -(y - sy), z);
-        dummy.scale.set(radius, radius * stretch, radius * 0.82);
+        const width = radius / Math.sqrt(stretch);
+        dummy.scale.set(width, radius * stretch, width * 0.82);
         dummy.updateMatrix();
         drops.setMatrixAt(i, dummy.matrix);
       });
