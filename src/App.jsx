@@ -1,11 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  ArrowDown,
   ArrowDownRight,
   ArrowLeft,
   ArrowRight,
   ArrowUpRight,
-  Check,
   ChevronDown,
   Coffee,
   Pause,
@@ -16,6 +14,7 @@ import {
 } from "lucide-react";
 import { categories, filterPosts, formatDate, posts } from "./data.js";
 import CoffeeScene from "./animation/CoffeeScene.jsx";
+import { paginate } from "./pagination.js";
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash);
@@ -134,7 +133,8 @@ export default function App() {
   const [category, setCategory] = useState("all");
   const [query, setQuery] = useState("");
   const [oldest, setOldest] = useState(false);
-  const [limit, setLimit] = useState(5);
+  const [requestedPage, setPage] = useState(1);
+  const [drain, setDrain] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [paused, setPaused] = useState(false);
@@ -146,7 +146,12 @@ export default function App() {
   const articleId = hash.startsWith("#/note/") ? hash.slice(7) : null;
   const article = posts.find((post) => post.id === articleId);
   const filtered = filterPosts(posts, category, query, oldest);
-  const visible = filtered.slice(0, limit);
+  const {
+    items: visible,
+    page,
+    pageCount,
+    offset,
+  } = paginate(filtered, requestedPage);
   const isIntro =
     ["writing", "greeting", "falling", "gathering"].includes(phase) &&
     sceneStatus !== "unavailable";
@@ -156,7 +161,16 @@ export default function App() {
   };
   const chooseCategory = (value) => {
     setCategory(value);
-    setLimit(5);
+    setPage(1);
+  };
+  const goToPage = (next) => {
+    setPage(next);
+    requestAnimationFrame(() => {
+      document.querySelector(".list-toolbar")?.focus({ preventScroll: true });
+      document
+        .querySelector("#journal")
+        ?.scrollIntoView({ behavior: "instant", block: "start" });
+    });
   };
   const beginReplay = () => {
     setPaused(false);
@@ -233,12 +247,32 @@ export default function App() {
         <>
           <CoffeeScene
             replay={replay}
+            drain={drain}
             paused={paused || aboutOpen}
             visible={!article}
             onPhase={setPhase}
             onStatus={setSceneStatus}
-            layoutKey={`${category}/${query}/${oldest}/${limit}`}
+            layoutKey={`${category}/${query}/${oldest}/${page}`}
           />
+          {phase === "flowing" && sceneStatus === "ready" && (
+            <div className="flood-controls">
+              <Coffee size={15} />
+              <span>Endless brew</span>
+              <output data-coffee-level aria-label="페이지 커피 수위" />
+              <button
+                onClick={() => setPaused((p) => !p)}
+                aria-label={paused ? "흐름 계속하기" : "흐름 멈추기"}
+              >
+                {paused ? <Play size={13} /> : <Pause size={13} />}
+              </button>
+              <button
+                onClick={() => setDrain((d) => d + 1)}
+                className="drain-button"
+              >
+                커피 비우기 <RotateCcw size={12} />
+              </button>
+            </div>
+          )}
           <main id="main">
             <section
               className={`hero ${isIntro ? "intro-active" : "intro-done"}`}
@@ -367,7 +401,7 @@ export default function App() {
                 </div>
               </aside>
               <div className="journal-main">
-                <div className="list-toolbar">
+                <div className="list-toolbar" tabIndex={-1}>
                   <div>
                     <h2>
                       {category === "all"
@@ -390,7 +424,10 @@ export default function App() {
                       <span className="sr-only">정렬 순서</span>
                       <select
                         value={oldest ? "oldest" : "newest"}
-                        onChange={(e) => setOldest(e.target.value === "oldest")}
+                        onChange={(e) => {
+                          setOldest(e.target.value === "oldest");
+                          setPage(1);
+                        }}
                       >
                         <option value="newest">Newest first</option>
                         <option value="oldest">Oldest first</option>
@@ -407,7 +444,7 @@ export default function App() {
                       value={query}
                       onChange={(e) => {
                         setQuery(e.target.value);
-                        setLimit(5);
+                        setPage(1);
                       }}
                       placeholder="제목, 내용, 태그로 찾아보세요"
                       aria-label="글 검색"
@@ -424,6 +461,16 @@ export default function App() {
                     </button>
                   </div>
                 )}
+                {visible.length > 0 && (
+                  <div className="pour-station" aria-hidden="true">
+                    <span>ALWAYS BREWING</span>
+                    <p>
+                      한 잔에서 다음 잔으로,
+                      <br />
+                      생각은 계속 이어집니다.
+                    </p>
+                  </div>
+                )}
                 <div className="post-list">
                   {visible.map((post, index) => (
                     <article className="post-row" key={post.id}>
@@ -431,11 +478,12 @@ export default function App() {
                         className="cup-anchor"
                         data-coffee-cup
                         data-index={index}
+                        data-note={post.id}
                         aria-hidden="true"
                       >
                         <span className="cup-fallback" />
                         <span className="cup-number">
-                          {String(index + 1).padStart(2, "0")}
+                          {String(offset + index + 1).padStart(2, "0")}
                         </span>
                       </div>
                       <a href={`#/note/${post.id}`} className="post-link">
@@ -495,21 +543,42 @@ export default function App() {
                     </button>
                   </div>
                 )}
-                <div className="list-end">
-                  {filtered.length > limit ? (
-                    <button
-                      className="load-more"
-                      onClick={() => setLimit((l) => l + 5)}
-                    >
-                      A few more notes <ArrowDown size={15} />
-                    </button>
-                  ) : filtered.length > 0 ? (
-                    <span className="all-read">
-                      <Check size={14} /> You’re all caught up. Time for a
-                      refill.
+                {filtered.length > 0 && (
+                  <nav className="pagination" aria-label="글 목록 페이지">
+                    <span className="page-summary">
+                      {offset + 1}–{offset + visible.length} / {filtered.length}{" "}
+                      notes
                     </span>
-                  ) : null}
-                </div>
+                    <div className="page-buttons">
+                      <button
+                        aria-label="이전 페이지"
+                        disabled={page === 1}
+                        onClick={() => goToPage(page - 1)}
+                      >
+                        <ArrowLeft size={15} />
+                      </button>
+                      {Array.from({ length: pageCount }, (_, i) => i + 1).map(
+                        (number) => (
+                          <button
+                            key={number}
+                            aria-label={`${number} 페이지`}
+                            aria-current={page === number ? "page" : undefined}
+                            onClick={() => goToPage(number)}
+                          >
+                            {String(number).padStart(2, "0")}
+                          </button>
+                        ),
+                      )}
+                      <button
+                        aria-label="다음 페이지"
+                        disabled={page === pageCount}
+                        onClick={() => goToPage(page + 1)}
+                      >
+                        <ArrowRight size={15} />
+                      </button>
+                    </div>
+                  </nav>
+                )}
               </div>
             </section>
           </main>

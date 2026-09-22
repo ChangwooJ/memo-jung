@@ -19,11 +19,11 @@ try {
   await page.waitForSelector('[data-phase="greeting"]', { timeout: 30000 });
   assert.equal(
     await page.locator("canvas").getAttribute("data-greeting"),
-    "coffee-droplets",
+    "coffee-beans",
   );
   assert.ok(
     Number(await page.locator("canvas").getAttribute("data-greeting-drops")) >
-      500,
+      200,
   );
   assert.equal(
     await page
@@ -37,6 +37,7 @@ try {
   await page.waitForTimeout(700);
   await page.screenshot({ path: ".artifacts/02-melting.png" });
   await page.waitForSelector('[data-phase="gathering"]');
+  await page.waitForTimeout(500);
   await page.screenshot({ path: ".artifacts/03-gathering.png" });
   await page.waitForSelector('[data-phase="pouring"]');
   await page.waitForTimeout(2200);
@@ -44,7 +45,36 @@ try {
   await page.waitForSelector('[data-phase="flowing"]');
   await page.waitForTimeout(8000);
   await page.screenshot({ path: ".artifacts/05-desktop.png" });
-  assert.equal(await page.locator(".post-row").count(), 5);
+  assert.equal(
+    await page.locator("canvas").getAttribute("data-pouring"),
+    "true",
+  );
+  await page.evaluate(() =>
+    window.scrollTo(0, document.documentElement.scrollHeight),
+  );
+  await page.screenshot({ path: ".artifacts/10-floor-filling.png" });
+  await page.waitForFunction(
+    () => Number(document.querySelector("canvas").dataset.floodLevel) >= 1,
+    {},
+    { timeout: 90000 },
+  );
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({ path: ".artifacts/11-full-coffee.png" });
+  assert.equal(
+    await page
+      .locator(".site-header")
+      .evaluate((el) => el.classList.contains("under-coffee")),
+    true,
+  );
+  await page.getByRole("button", { name: "흐름 멈추기", exact: true }).click();
+  await page.getByRole("button", { name: "커피 비우기", exact: true }).click();
+  await page.waitForFunction(
+    () => Number(document.querySelector("canvas").dataset.floodLevel) === 0,
+  );
+  await page
+    .getByRole("button", { name: "흐름 계속하기", exact: true })
+    .click();
+  assert.equal(await page.locator(".post-row").count(), 3);
   await page
     .getByRole("button", { name: "Development 03", exact: true })
     .click();
@@ -87,8 +117,21 @@ try {
   assert.equal(await page.locator("dialog").evaluate((el) => el.open), true);
   await page.keyboard.press("Escape");
   assert.equal(await page.locator("dialog").count(), 0);
-  await page.getByRole("button", { name: "A few more notes" }).click();
-  assert.equal(await page.locator(".post-row").count(), 6);
+  await page.getByRole("button", { name: "2 페이지", exact: true }).click();
+  assert.equal(await page.locator(".post-row").count(), 3);
+  assert.equal(await page.locator(".cup-number").first().textContent(), "04");
+  assert.match(
+    await page.locator(".post-row h3").first().textContent(),
+    /웹에 작은/,
+  );
+  assert.equal(
+    await page
+      .getByRole("button", { name: "다음 페이지", exact: true })
+      .isDisabled(),
+    true,
+  );
+  await page.getByRole("button", { name: "이전 페이지", exact: true }).click();
+  assert.equal(await page.locator(".cup-number").first().textContent(), "01");
   await page.getByRole("button", { name: "커피 애니메이션 일시정지" }).click();
   await page
     .getByRole("button", { name: "커피 애니메이션 재생", exact: true })
@@ -123,7 +166,7 @@ try {
   });
   await noWebGL.goto("http://127.0.0.1:5173");
   await noWebGL.waitForSelector('[data-scene="unavailable"]');
-  assert.equal(await noWebGL.locator(".post-row").count(), 5);
+  assert.equal(await noWebGL.locator(".post-row").count(), 3);
   assert.equal(
     await noWebGL.locator(".cup-fallback").first().isVisible(),
     true,
@@ -135,7 +178,7 @@ try {
     "The normal WebGL session has no console or page errors",
   );
   console.log(
-    "PASS: animated phases, one-time intro, filters, search, empty state, sorting, article navigation, dialog, load more, pause/replay, mobile, reduced motion, and WebGL fallback.",
+    "PASS: animated phases, one-time intro, filters, search, empty state, sorting, article navigation, dialog, pagination, persistent pouring, whole-page flood, drain, pause/replay, mobile, reduced motion, and WebGL fallback.",
   );
   console.log(
     "Screenshots: .artifacts/01-greeting.png through 09-mobile-scroll.png",

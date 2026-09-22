@@ -1,8 +1,16 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { smooth, getPhase, getCupState } from "./timeline.js";
+import {
+  smooth,
+  getPhase,
+  getCupState,
+  getPourAmount,
+  getFloodStart,
+  getFloodLevel,
+} from "./timeline.js";
 
-import { createDropletGreeting } from "./dropletGreeting.js";
+import { createBeanGreeting } from "./beanGreeting.js";
+import { createFlood } from "./flood.js";
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 const mix = THREE.MathUtils.lerp;
 const seed = (n) => {
@@ -12,7 +20,15 @@ const seed = (n) => {
 
 export function createCoffeeScene(
   canvas,
-  { initialTime, getState, onPhase, onStatus, onTime },
+  {
+    initialTime,
+    initialFloodTime = 0,
+    onFloodTime,
+    getState,
+    onPhase,
+    onStatus,
+    onTime,
+  },
 ) {
   let renderer;
   try {
@@ -25,7 +41,7 @@ export function createCoffeeScene(
   } catch {
     onStatus("unavailable");
     onPhase("flowing");
-    return { dispose() {}, measure() {}, restart() {} };
+    return { dispose() {}, measure() {}, restart() {}, drain() {} };
   }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.65));
   renderer.setClearColor(0x000000, 0);
@@ -306,8 +322,9 @@ export function createCoffeeScene(
   );
   potGlint.rotation.z = -0.19;
 
-  const greeting = createDropletGreeting(scene, coffee);
-  canvas.dataset.greeting = "coffee-droplets";
+  const greeting = createBeanGreeting(scene, coffee);
+  const flood = createFlood(scene);
+  canvas.dataset.greeting = "coffee-beans";
   canvas.dataset.greetingDrops = String(greeting.count);
   const puddle = mesh(new THREE.SphereGeometry(1, 48, 20), coffee, scene);
   const puddleRim = mesh(
@@ -365,8 +382,8 @@ export function createCoffeeScene(
       curve.v1.set(mix(a.x, b.x, 0.35), a.y + 40, a.z + 30);
       curve.v2.set(b.x - 90, b.y + 90, b.z + 10);
     } else if (overflow) {
-      curve.v1.set(a.x + 26, a.y + 1, a.z + 4);
-      curve.v2.set(b.x + 9, mix(a.y, b.y, 0.68), b.z + 3);
+      curve.v1.set(a.x, a.y - 23, a.z + 8);
+      curve.v2.set(b.x, b.y + 22, b.z + 10);
     } else {
       curve.v1.set(a.x - 10, a.y - 19, a.z);
       curve.v2.set(b.x + 7, mix(a.y, b.y, 0.65), b.z);
@@ -403,6 +420,11 @@ export function createCoffeeScene(
   let measured = false;
   let disposed = false;
   let elapsed = initialTime || 0;
+  let floodSeconds = initialFloodTime;
+  let flowOrigin = null;
+  let listSignature = null;
+  let lastSimTime = elapsed;
+  let pageHeight = 0;
   let previousNow = performance.now();
   let previousPhase = "";
   let frameId;
@@ -426,6 +448,21 @@ export function createCoffeeScene(
       pot: rect(document.querySelector("[data-coffee-pot]")),
       cups: [...document.querySelectorAll("[data-coffee-cup]")].map(rect),
     };
+    const signature = layout.cups
+      .map((cup) => cup.element.dataset.note)
+      .join("/");
+    if (
+      listSignature !== null &&
+      listSignature !== signature &&
+      elapsed > 11.05
+    ) {
+      flowOrigin = elapsed;
+      floodSeconds = 0;
+      onFloodTime?.(0);
+    }
+    listSignature = signature;
+    pageHeight = document.documentElement.scrollHeight;
+    flood.measure();
     measured = true;
   }
   const resize = new ResizeObserver(() => {
@@ -443,6 +480,7 @@ export function createCoffeeScene(
   motionQuery.addEventListener("change", motionHandler);
   const contextLost = (e) => {
     e.preventDefault();
+    flood.update({ waterY: Infinity, t: 0, active: false });
     onStatus("unavailable");
     onPhase("flowing");
   };
@@ -472,6 +510,9 @@ export function createCoffeeScene(
       previousPhase = phase;
       onPhase(phase);
     }
+    const simDelta = elapsed - lastSimTime;
+    lastSimTime = elapsed;
+    const flowTime = flowOrigin === null ? t : t - flowOrigin + 11.05;
     const sy = scrollY;
     const g = layout.greeting;
     const p = layout.pot;
@@ -482,27 +523,28 @@ export function createCoffeeScene(
     const restingPot = V(p.x + p.w * 0.45, -(p.y + p.h * 0.47 - sy), 15);
     const potScale = innerWidth <= 540 ? 0.6 : innerWidth <= 800 ? 1.1 : 1.48;
     const firstCup = layout.cups[0];
+    const cupScale = firstCup ? firstCup.w / 90 : 1;
+    const pourScale = 0.95 * cupScale;
     const pourTarget = firstCup
       ? V(
-          firstCup.x + firstCup.w / 2 + 92 * Math.min(1, potScale),
-          -(firstCup.y - 51 - sy),
+          firstCup.x + firstCup.w / 2 + 68 * cupScale,
+          -(firstCup.y - 65 * cupScale - sy),
           35,
         )
       : restingPot;
-    const approach = smooth(9.3, 11.1, t),
-      depart = smooth(14.3, 16.6, t);
-    pot.position.copy(restingPot).lerp(pourTarget, approach * (1 - depart));
-    pot.scale.setScalar(potScale * (1 - 0.18 * approach * (1 - depart)));
-    pot.rotation.z = 0.62 * smooth(10.4, 11.4, t) * (1 - smooth(14.0, 15.3, t));
+    const approach = reduced || !firstCup ? 0 : smooth(9.6, 11.1, t);
+    pot.position.copy(restingPot).lerp(pourTarget, approach);
+    pot.scale.setScalar(mix(potScale, pourScale, approach));
+    pot.rotation.z = 0.62 * smooth(10.4, 11.4, t) * approach;
     pot.rotation.y = -0.18;
     const lidLift = smooth(7.3, 7.8, t) * (1 - smooth(9.3, 9.8, t));
     lid.position.set(lidLift * 28, lidLift * 25, 0);
     lid.rotation.z = -lidLift * 0.28;
-    pot.visible = p.y - sy < innerHeight + 200 || (t > 9 && t < 17);
+    pot.visible = -pot.position.y > -180 && -pot.position.y < innerHeight + 180;
     const potFill = reduced
       ? 0.13
-      : mix(0.04, 0.88, smooth(7.4, 9.6, t)) *
-        (1 - 0.9 * smooth(11.3, 14.3, t));
+      : mix(0.04, 0.72, smooth(7.8, 9.6, t)) *
+        (1 - 0.2 * smooth(11.3, 14.3, t));
     potLiquid.scale.y = potFill;
     potLiquid.position.y = -40 + 24.5 * potFill;
     potSurface.position.y = -40 + 49 * potFill;
@@ -520,7 +562,7 @@ export function createCoffeeScene(
       target: potBody.localToWorld(V(0, 46, 0)),
       reduced,
     });
-    const poolIn = smooth(5.2, 7.15, t),
+    const poolIn = smooth(5.45, 7.15, t),
       poolOut = smooth(7.7, 9.55, t);
     const poolAmount = poolIn * (1 - poolOut);
     puddle.visible = poolAmount > 0.002 && !reduced;
@@ -537,7 +579,7 @@ export function createCoffeeScene(
     const gatherFlow = smooth(7.65, 8.1, t) * (1 - smooth(9.1, 9.6, t));
     if (gatherFlow > 0.001 && !reduced) {
       const a = puddle.position.clone();
-      const b = potBody.localToWorld(V(-2, 46, 0));
+      const b = potBody.localToWorld(V(-2, 20, 0));
       updateStream(gatheringStream, a, b, gatherFlow, t, 4.4, "gather");
     } else gatheringStream.object.visible = false;
 
@@ -562,7 +604,7 @@ export function createCoffeeScene(
       cup.group.updateMatrixWorld(true);
       cup.shadow.position.set(cx + 3, -(cy + 35 * scale - sy), -40);
       cup.shadow.scale.set(1.15 * scale, 0.17 * scale, 1);
-      const { fill, overflow } = getCupState(t, index, reduced);
+      const { fill, overflow } = getCupState(flowTime, index, reduced);
       const filled = fill > 0.5 ? "true" : "false";
       if (anchor.element.dataset.filled !== filled)
         anchor.element.dataset.filled = filled;
@@ -596,13 +638,14 @@ export function createCoffeeScene(
       cup.ripple.position.y = topY + 1;
       cup.ripple.scale.setScalar(3 + ripplePhase * 23);
       cup.ripple.material.opacity = (1 - ripplePhase) * 0.28;
-      cup.drop.visible = overflow > 0.01 && index < layout.cups.length - 1;
+      cup.drop.visible = overflow > 0.01;
+      cup.drop.position.set(0, 29, 31);
       cup.drop.scale.set(1, 1 + Math.sin(t * 7) * 0.15, 1);
       // Tiny ballistic splashes, only at a receiving liquid surface.
       const incoming =
         index === 0
-          ? t > 11.25 && t < 14.2
-          : getCupState(t, index - 1, reduced).overflow > 0;
+          ? flowTime > 11.25
+          : getCupState(flowTime, index - 1, reduced).overflow > 0;
       if (incoming && fill > 0.03 && !reduced)
         for (let j = 0; j < 8; j++) {
           const age = (t * 1.35 + j * 0.137 + index * 0.21) % 1;
@@ -627,33 +670,54 @@ export function createCoffeeScene(
     drops.visible = dropCount > 0;
     drops.instanceMatrix.needsUpdate = true;
 
+    if (
+      !reduced &&
+      layout.cups.length &&
+      flowTime >= getFloodStart(layout.cups.length)
+    )
+      floodSeconds += simDelta;
+    onFloodTime?.(floodSeconds);
+    const floodLevel = layout.cups.length
+      ? getFloodLevel(floodSeconds, reduced)
+      : 0;
+    const waterY = pageHeight * (1 - floodLevel) - 12 * floodLevel;
+    flood.update({ waterY, t, active: floodLevel > 0 });
+    canvas.dataset.floodLevel = floodLevel.toFixed(4);
+    const levelLabel = document.querySelector("[data-coffee-level]");
+    if (levelLabel) levelLabel.textContent = Math.round(floodLevel * 100) + "%";
     for (let i = 0; i < 6; i++) {
       const current = cupModels[i],
         next = cupModels[i + 1];
-      const active = layout.cups[i] && layout.cups[i + 1] && next;
-      const amount = active ? getCupState(t, i, reduced).overflow : 0;
+      const anchor = layout.cups[i];
+      const amount = anchor ? getCupState(flowTime, i, reduced).overflow : 0;
       if (amount > 0) {
-        const a = current.group.localToWorld(V(32, 29, 0));
-        const nextFill = getCupState(t, i + 1, reduced).fill;
-        const b = next.group.localToWorld(V(-3, -26 + 55 * nextFill, 5));
-        updateStream(
-          streams[i],
-          a,
-          b,
-          amount,
-          t,
-          2.1 * current.group.scale.x,
-          true,
-        );
+        const a = current.group.localToWorld(V(0, 29, 31));
+        let b;
+        if (layout.cups[i + 1] && next) {
+          const nextFill = getCupState(flowTime, i + 1, reduced).fill;
+          b = next.group.localToWorld(V(0, -26 + 55 * nextFill, 8));
+        } else {
+          b = V(a.x, -(waterY + 10 - sy), 25);
+        }
+        if (b.y < a.y)
+          updateStream(
+            streams[i],
+            a,
+            b,
+            amount,
+            t,
+            3.6 * current.group.scale.x,
+            true,
+          );
+        else streams[i].object.visible = false;
       } else streams[i].object.visible = false;
     }
-    const pourAmount = smooth(11.05, 11.5, t) * (1 - smooth(13.9, 14.35, t));
-    if (firstCup && pourAmount > 0 && !reduced) {
+    const pourAmount = getPourAmount(flowTime, reduced);
+    canvas.dataset.pouring = firstCup && pourAmount > 0 ? "true" : "false";
+    if (firstCup && pourAmount > 0) {
       const spout = potBody.localToWorld(V(-65, 37, 0));
-      const level = getCupState(t, 0).fill;
-      const target = cupModels[0].group.localToWorld(
-        V(-3, -26 + 55 * level, 5),
-      );
+      const level = getCupState(flowTime, 0).fill;
+      const target = cupModels[0].group.localToWorld(V(0, -26 + 55 * level, 5));
       updateStream(streams[6], spout, target, pourAmount, t, 3.2);
     } else streams[6].object.visible = false;
     renderer.render(scene, camera);
@@ -666,7 +730,17 @@ export function createCoffeeScene(
     },
     restart: () => {
       elapsed = 0;
+      lastSimTime = 0;
+      floodSeconds = 0;
+      flowOrigin = null;
+      onFloodTime?.(0);
+      measured = false;
       previousPhase = "";
+    },
+    drain: () => {
+      floodSeconds = 0;
+      onFloodTime?.(0);
+      measured = false;
     },
     dispose: () => {
       disposed = true;
@@ -676,6 +750,8 @@ export function createCoffeeScene(
       motionQuery.removeEventListener("change", motionHandler);
       canvas.removeEventListener("webglcontextlost", contextLost);
       greeting.dispose();
+      flood.dispose();
+      drops.dispose();
       resources.forEach((resource) => resource.dispose());
       environment.dispose();
       renderer.dispose();

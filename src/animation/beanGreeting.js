@@ -24,7 +24,7 @@ function contains(points, x, y) {
 }
 
 // Sample the text silhouette, as in the supplied sand reference. There is no
-// solid text mesh underneath: every visible part of the greeting is a drop.
+// solid text mesh underneath: every visible part of the greeting is a bean.
 function sampleGreeting() {
   const font = new FontLoader().parse(fontData);
   const points = [];
@@ -46,8 +46,8 @@ function sampleGreeting() {
           contains(contour.shape, x, y) &&
           !contour.holes.some((hole) => contains(hole, x, y));
         let row = 0;
-        for (let y = minY + 1; y < maxY; y += 4.0, row++) {
-          for (let x = minX + 1 + (row % 2) * 2.2; x < maxX; x += 4.4) {
+        for (let y = minY + 1; y < maxY; y += 6.3, row++) {
+          for (let x = minX + 1 + (row % 2) * 2.8; x < maxX; x += 5.6) {
             if (!inShape(x, y)) continue;
             const id = points.length;
             const edge =
@@ -57,10 +57,9 @@ function sampleGreeting() {
             points.push({
               x: offset + x + (seed(id + 3) - 0.5) * 0.45,
               y: 56 + lineIndex * 77 - y,
-              radius: 1.7 + seed(id + 11) * 0.5,
+              radius: 2.05 + seed(id + 11) * 0.5,
               release: 4.8 + seed(id + 29) * 0.85 + (edge ? 0 : 0.2),
               drift: (seed(id + 43) - 0.5) * 22,
-              gather: 7.65 + seed(id + 57) * 0.3,
               phase: seed(id + 67) * Math.PI * 2,
             });
           }
@@ -73,16 +72,31 @@ function sampleGreeting() {
   return { points, width };
 }
 
-export function createDropletGreeting(scene, coffee) {
+export function createBeanGreeting(scene, coffee) {
   const { points, width } = sampleGreeting();
-  const geometry = new THREE.SphereGeometry(1, 10, 8);
+  const geometry = new THREE.SphereGeometry(1, 20, 16);
+  const vertices = geometry.attributes.position;
+  const colors = new Float32Array(vertices.count * 3);
+  for (let i = 0; i < vertices.count; i++) {
+    const x = vertices.getX(i),
+      y = vertices.getY(i),
+      z = vertices.getZ(i);
+    const seamX = Math.sin(y * 3.1) * 0.13;
+    const seam = z > 0 ? Math.exp(-(((x - seamX) / 0.12) ** 2)) : 0;
+    vertices.setXYZ(i, x, y * 1.38, z * 0.75 - seam * 0.24);
+    const shade = 1 - seam * 0.91;
+    colors.set([shade, shade, shade], i * 3);
+  }
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  geometry.computeVertexNormals();
   const material = coffee.clone();
   material.color.set(0xffffff);
-  material.roughness = 0.22;
-  material.clearcoat = 0.55;
+  material.roughness = 0.57;
+  material.vertexColors = true;
+  material.clearcoat = 0.12;
   material.envMapIntensity = 0.25;
   const drops = new THREE.InstancedMesh(geometry, material, points.length);
-  drops.name = "coffee-droplet-greeting";
+  drops.name = "coffee-bean-greeting";
   drops.frustumCulled = false;
   drops.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   scene.add(drops);
@@ -95,8 +109,8 @@ export function createDropletGreeting(scene, coffee) {
   });
   return {
     count: points.length,
-    update({ t, g, sy, floorY, puddleX, target, reduced }) {
-      drops.visible = !reduced && t < 9.7;
+    update({ t, g, sy, floorY, puddleX, reduced }) {
+      drops.visible = !reduced && t < 7.65;
       if (!drops.visible) return;
       const scale = Math.min(g.w / width, g.h / 154);
       points.forEach((point, i) => {
@@ -116,30 +130,25 @@ export function createDropletGreeting(scene, coffee) {
             Math.sin(point.phase) *
             (18 + seed(i + 2) * 35) *
             scale;
-        let z = 9 + Math.sin(point.phase) * 0.7;
+        const z = 9 + Math.sin(point.phase) * 0.7;
         let stretch = 1 + Math.sin(t * 2 + point.phase) * 0.035;
         let radius = point.radius * scale * smooth(0, 0.45, t);
+        dummy.rotation.set(0.16, -0.18, point.phase * 0.45);
         const age = Math.max(0, t - point.release);
         if (age > 0) {
           const fall = getDropletFall(floorY - ty, age, scale);
           x = tx + point.drift * Math.min(age, fall.duration) * scale;
           y = ty + fall.offset;
-          stretch = 1 + Math.min(1.8, fall.speed / (340 * scale));
+          stretch = 1;
+          dummy.rotation.z = point.phase + age * point.drift * 0.12;
           if (fall.landed) {
             const settle = smooth(fall.duration, fall.duration + 0.45, age);
             x = mix(x, puddleX + (tx - puddleX) * 0.83, settle);
             y = floorY + Math.sin(point.phase) * 2 * scale;
-            stretch = 0.45;
+            stretch = 1 - smooth(fall.duration, fall.duration + 0.3, age) * 0.7;
+            radius *=
+              1 - smooth(fall.duration + 0.05, fall.duration + 0.38, age);
           }
-        }
-        const gather = smooth(point.gather, 9.25 + seed(i + 71) * 0.35, t);
-        if (gather > 0) {
-          const arc = Math.sin(gather * Math.PI);
-          x = mix(x, target.x, gather);
-          y = mix(y, -target.y + sy, gather) - arc * 55;
-          z = mix(z, target.z, gather) + arc * 8;
-          radius *= 1 - smooth(0.82, 1, gather);
-          stretch = 1 + arc * 0.8;
         }
         dummy.position.set(x, -(y - sy), z);
         const width = radius / Math.sqrt(stretch);

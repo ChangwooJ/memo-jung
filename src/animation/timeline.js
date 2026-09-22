@@ -22,3 +22,15 @@ export function getCupState(t, index, reducedMotion = false) {
     overflow: smooth(start + 2.3, start + 2.9, t),
   };
 }
+
+export function getPourAmount(t, reducedMotion = false) {
+  return reducedMotion ? 0 : smooth(11.05, 11.5, t);
+}
+
+export function getFloodStart(cupCount) {
+  return cupCount > 0 ? 11.3 + (cupCount - 1) * 2.5 + 2.9 + 1.1 : Infinity;
+}
+
+export function getFloodLevel(seconds, reducedMotion = false) {
+  return reducedMotion ? 0 : clamp(seconds / 55);
+}

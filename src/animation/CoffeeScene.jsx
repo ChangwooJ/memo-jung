@@ -1,9 +1,11 @@
 import { useEffect, useRef } from "react";
 
-// Keep the lifetime independent from list filtering: the pot only plays once.
+// Preserve the intro and flood when returning from a note.
 let lastElapsed = 0;
+let lastFloodTime = 0;
 export default function CoffeeScene({
   replay,
+  drain,
   paused,
   visible,
   layoutKey,
@@ -12,6 +14,8 @@ export default function CoffeeScene({
 }) {
   const canvasRef = useRef(null);
   const engineRef = useRef(null);
+  const replaySeen = useRef(replay);
+  const drainSeen = useRef(drain);
   const stateRef = useRef({ paused, visible });
   stateRef.current = { paused, visible };
   useEffect(() => {
@@ -22,6 +26,10 @@ export default function CoffeeScene({
         if (disposed) return;
         engine = createCoffeeScene(canvasRef.current, {
           initialTime: lastElapsed,
+          initialFloodTime: lastFloodTime,
+          onFloodTime: (value) => {
+            lastFloodTime = value;
+          },
           getState: () => stateRef.current,
           onPhase,
           onStatus,
@@ -45,11 +53,19 @@ export default function CoffeeScene({
     engineRef.current?.measure();
   }, [layoutKey]);
   useEffect(() => {
-    if (replay > 0) {
+    if (replay !== replaySeen.current) {
+      replaySeen.current = replay;
       lastElapsed = 0;
+      lastFloodTime = 0;
       engineRef.current?.restart();
     }
   }, [replay]);
+  useEffect(() => {
+    if (drain !== drainSeen.current) {
+      drainSeen.current = drain;
+      engineRef.current?.drain();
+    }
+  }, [drain]);
   return (
     <canvas className="coffee-canvas" ref={canvasRef} aria-hidden="true" />
   );
