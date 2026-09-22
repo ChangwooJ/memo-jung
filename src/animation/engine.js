@@ -11,6 +11,7 @@ import {
 
 import { createBeanGreeting } from "./beanGreeting.js";
 import { createFlood } from "./flood.js";
+import { getSurfaceRivuletPoint, getOverflowGrowth } from "./overflow.js";
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 const mix = THREE.MathUtils.lerp;
 const seed = (n) => {
@@ -368,6 +369,7 @@ export function createCoffeeScene(
   }
   for (let i = 0; i < 7; i++) makeStream();
   const gatheringStream = makeStream();
+  const surfaceStreams = cupModels.map(() => [makeStream(), makeStream()]);
   const tangent = V(),
     normal = V(),
     binormal = V(),
@@ -390,26 +392,52 @@ export function createCoffeeScene(
     }
     for (let i = 0; i <= stream.segments; i++) {
       const u = (i / stream.segments) * flow;
-      curve.getPoint(u, center);
-      curve.getTangent(u, tangent).normalize();
+      if (overflow?.surfaceGroup) {
+        const point = getSurfaceRivuletPoint(u, overflow.side);
+        center
+          .set(point.x, point.y, point.z)
+          .applyMatrix4(overflow.surfaceGroup.matrixWorld);
+        const p0 = getSurfaceRivuletPoint(
+          Math.max(0, u - 0.001),
+          overflow.side,
+        );
+        const p1 = getSurfaceRivuletPoint(
+          Math.min(1, u + 0.001),
+          overflow.side,
+        );
+        tangent
+          .set(p1.x - p0.x, p1.y - p0.y, p1.z - p0.z)
+          .transformDirection(overflow.surfaceGroup.matrixWorld);
+      } else {
+        curve.getPoint(u, center);
+        curve.getTangent(u, tangent).normalize();
+      }
       normal.crossVectors(tangent, V(0, 0, 1)).normalize();
       binormal.crossVectors(tangent, normal).normalize();
       const wave =
         Math.sin(u * 29 - t * 8) * 0.12 + Math.sin(u * 61 - t * 11) * 0.055;
-      const r = radius * (1 - u * 0.28 + wave);
-      center.x += Math.sin(t * 4 + u * 22) * Math.sin(u * Math.PI) * 1.25;
+      const surface = !!overflow?.surfaceGroup;
+      const r = radius * (1 - u * 0.28 + wave * (surface ? 0.45 : 0.7));
+      center.x +=
+        Math.sin(t * 4 + u * 22) *
+        Math.sin(u * Math.PI) *
+        (surface ? 0.25 : 0.75);
       for (let j = 0; j <= stream.sides; j++) {
         const angle = (j / stream.sides) * Math.PI * 2;
+        const depth = surface ? 0.42 : 1;
         const offset = (i * (stream.sides + 1) + j) * 3;
         stream.positions[offset] =
           center.x +
-          r * (normal.x * Math.cos(angle) + binormal.x * Math.sin(angle));
+          r *
+            (normal.x * Math.cos(angle) + binormal.x * Math.sin(angle) * depth);
         stream.positions[offset + 1] =
           center.y +
-          r * (normal.y * Math.cos(angle) + binormal.y * Math.sin(angle));
+          r *
+            (normal.y * Math.cos(angle) + binormal.y * Math.sin(angle) * depth);
         stream.positions[offset + 2] =
           center.z +
-          r * (normal.z * Math.cos(angle) + binormal.z * Math.sin(angle));
+          r *
+            (normal.z * Math.cos(angle) + binormal.z * Math.sin(angle) * depth);
       }
     }
     stream.object.geometry.attributes.position.needsUpdate = true;
@@ -638,9 +666,14 @@ export function createCoffeeScene(
       cup.ripple.position.y = topY + 1;
       cup.ripple.scale.setScalar(3 + ripplePhase * 23);
       cup.ripple.material.opacity = (1 - ripplePhase) * 0.28;
-      cup.drop.visible = overflow > 0.01;
-      cup.drop.position.set(0, 29, 31);
-      cup.drop.scale.set(1, 1 + Math.sin(t * 7) * 0.15, 1);
+      const growth = getOverflowGrowth(overflow);
+      cup.drop.visible = growth.junction > 0.001;
+      cup.drop.position.set(0, -36, 25.7);
+      cup.drop.scale.set(
+        1.75 * growth.junction,
+        (1.9 + Math.sin(t * 7) * 0.13) * growth.junction,
+        1.25 * growth.junction,
+      );
       // Tiny ballistic splashes, only at a receiving liquid surface.
       const incoming =
         index === 0
@@ -690,8 +723,26 @@ export function createCoffeeScene(
         next = cupModels[i + 1];
       const anchor = layout.cups[i];
       const amount = anchor ? getCupState(flowTime, i, reduced).overflow : 0;
+      const growth = getOverflowGrowth(amount);
+      for (let branch = 0; branch < 2; branch++) {
+        const stream = surfaceStreams[i][branch];
+        if (growth.branches > 0) {
+          updateStream(
+            stream,
+            V(),
+            V(),
+            growth.branches,
+            t,
+            3.5 * current.group.scale.x,
+            { surfaceGroup: current.group, side: branch === 0 ? -1 : 1 },
+          );
+        } else stream.object.visible = false;
+      }
       if (amount > 0) {
-        const a = current.group.localToWorld(V(0, 29, 31));
+        const junction = getSurfaceRivuletPoint(1, 1);
+        const a = current.group.localToWorld(
+          V(junction.x, junction.y, junction.z),
+        );
         let b;
         if (layout.cups[i + 1] && next) {
           const nextFill = getCupState(flowTime, i + 1, reduced).fill;
@@ -704,9 +755,9 @@ export function createCoffeeScene(
             streams[i],
             a,
             b,
-            amount,
+            growth.stem,
             t,
-            3.6 * current.group.scale.x,
+            4 * current.group.scale.x,
             true,
           );
         else streams[i].object.visible = false;
