@@ -18,6 +18,14 @@ try {
   await page.waitForSelector('[data-scene="ready"]', { timeout: 30000 });
   await page.waitForSelector('[data-phase="greeting"]', { timeout: 30000 });
   assert.equal(
+    await page.locator("canvas").getAttribute("data-greeting"),
+    "coffee-droplets",
+  );
+  assert.ok(
+    Number(await page.locator("canvas").getAttribute("data-greeting-drops")) >
+      500,
+  );
+  assert.equal(
     await page
       .locator(".hero h1")
       .evaluate((el) => Number(getComputedStyle(el).opacity) < 0.01),

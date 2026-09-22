@@ -1,11 +1,8 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { FontLoader } from "three/addons/loaders/FontLoader.js";
-import { TextGeometry } from "three/addons/geometries/TextGeometry.js";
-import fontData from "three/examples/fonts/optimer_regular.typeface.json";
-import { clamp, smooth, getPhase, getCupState } from "./timeline.js";
+import { smooth, getPhase, getCupState } from "./timeline.js";
 
-const font = new FontLoader().parse(fontData);
+import { createDropletGreeting } from "./dropletGreeting.js";
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 const mix = THREE.MathUtils.lerp;
 const seed = (n) => {
@@ -309,71 +306,9 @@ export function createCoffeeScene(
   );
   potGlint.rotation.z = -0.19;
 
-  // Extruded, bevelled type has a continuous wet surface, not a cloud of sand.
-  const greeting = new THREE.Group();
-  scene.add(greeting);
-  const glyphs = [];
-  let maxTextWidth = 0;
-  ["Hi, I'm", "Changwoo Jung!"].forEach((line, lineIndex) => {
-    let x = 0;
-    [...line].forEach((letter, letterIndex) => {
-      const width = (font.data.glyphs[letter]?.ha ?? 300) * 0.065;
-      if (letter !== " ") {
-        const geometry = new TextGeometry(letter, {
-          font,
-          size: 65,
-          depth: 4,
-          curveSegments: 12,
-          bevelEnabled: true,
-          bevelSize: 1.5,
-          bevelThickness: 1.8,
-          bevelSegments: 4,
-        });
-        const typeMaterial = coffee.clone();
-        const uniforms = { uErosion: { value: -40 }, uTypeTime: { value: 0 } };
-        // Reference's edge release becomes a wet, uneven erosion front. The
-        // original text silhouette stays in place while its underside liquefies.
-        typeMaterial.onBeforeCompile = (shader) => {
-          Object.assign(shader.uniforms, uniforms);
-          shader.vertexShader =
-            "varying vec3 vTypePosition;\n" + shader.vertexShader;
-          shader.vertexShader = shader.vertexShader.replace(
-            "#include <begin_vertex>",
-            "#include <begin_vertex>\nvTypePosition = position;",
-          );
-          shader.fragmentShader =
-            "varying vec3 vTypePosition;\nuniform float uErosion;\nuniform float uTypeTime;\n" +
-            shader.fragmentShader;
-          shader.fragmentShader = shader.fragmentShader.replace(
-            "#include <clipping_planes_fragment>",
-            `#include <clipping_planes_fragment>
-            float edge = uErosion + sin(vTypePosition.x * .23 + uTypeTime * 2.1) * 4.0 + sin(vTypePosition.x * .63 - uTypeTime) * 2.1;
-            if (vTypePosition.y < edge) discard;
-          `,
-          );
-        };
-        const letterMesh = mesh(geometry, typeMaterial, greeting);
-        geometry.computeBoundingBox();
-        const bounds = geometry.boundingBox;
-        const contours = font
-          .generateShapes(letter, 65)
-          .map((shape) => shape.extractPoints(12));
-        glyphs.push({
-          mesh: letterMesh,
-          uniforms,
-          contours,
-          bounds,
-          x,
-          y: -lineIndex * 77,
-          order: glyphs.length,
-          lineIndex,
-          letterIndex,
-        });
-      }
-      x += width;
-    });
-    maxTextWidth = Math.max(maxTextWidth, x);
-  });
+  const greeting = createDropletGreeting(scene, coffee);
+  canvas.dataset.greeting = "coffee-droplets";
+  canvas.dataset.greetingDrops = String(greeting.count);
   const puddle = mesh(new THREE.SphereGeometry(1, 48, 20), coffee, scene);
   const puddleRim = mesh(
     new THREE.TorusGeometry(1, 0.014, 8, 64),
@@ -415,27 +350,7 @@ export function createCoffeeScene(
     return stream;
   }
   for (let i = 0; i < 7; i++) makeStream();
-  const textStreams = Array.from({ length: 45 }, () => makeStream());
   const gatheringStream = makeStream();
-  const inContour = (x, y, points) => {
-    let inside = false;
-    for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
-      const a = points[i],
-        b = points[j];
-      if (
-        a.y > y !== b.y > y &&
-        x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x
-      )
-        inside = !inside;
-    }
-    return inside;
-  };
-  const inGlyph = (glyph, x, y) =>
-    glyph.contours.some(
-      (contour) =>
-        inContour(x, y, contour.shape) &&
-        !contour.holes.some((hole) => inContour(x, y, hole)),
-    );
   const tangent = V(),
     normal = V(),
     binormal = V(),
@@ -561,7 +476,7 @@ export function createCoffeeScene(
     const g = layout.greeting;
     const p = layout.pot;
     if (!g || !p) return;
-    const textScale = Math.min(g.w / maxTextWidth, g.h / 154);
+
     const floorY = g.y + g.h - 2;
     const puddleX = g.x + Math.min(g.w * 0.47, 285);
     const restingPot = V(p.x + p.w * 0.45, -(p.y + p.h * 0.47 - sy), 15);
@@ -596,66 +511,15 @@ export function createCoffeeScene(
     potFoam.scale.setScalar(mix(0.91, 1, potFill));
     pot.updateMatrixWorld(true);
 
-    greeting.position.set(g.x, -(g.y + 56 * textScale - sy), 5);
-    greeting.scale.setScalar(textScale);
-    greeting.visible = t < 7.4 && !reduced;
-    glyphs.forEach(({ mesh: letter, uniforms, x, y, order, lineIndex }) => {
-      const reveal = smooth(order * 0.045, order * 0.045 + 0.8, t);
-      const melt = smooth(4.8 + order * 0.025, 6.8 + order * 0.022, t);
-      letter.position.set(x + Math.sin(t * 1.8 + order) * 0.22, y, 0);
-      letter.scale.set(1, Math.max(0.018, reveal), 1);
-      uniforms.uErosion.value = mix(-40, 85, melt);
-      uniforms.uTypeTime.value = t;
-      letter.rotation.z = Math.sin(t * 2 + order) * 0.002 * (lineIndex + 1);
-      letter.visible = reveal > 0.001 && melt < 0.995;
+    greeting.update({
+      t,
+      g,
+      sy,
+      floorY,
+      puddleX,
+      target: potBody.localToWorld(V(0, 46, 0)),
+      reduced,
     });
-    greeting.updateMatrixWorld(true);
-    textStreams.forEach((stream) => {
-      stream.object.visible = false;
-    });
-    if (t > 4.9 && t < 7.45 && !reduced) {
-      let streamIndex = 0;
-      glyphs.forEach((glyph) => {
-        const melt = smooth(
-          4.8 + glyph.order * 0.025,
-          6.8 + glyph.order * 0.022,
-          t,
-        );
-        if (melt < 0.08 || melt > 0.93) return;
-        for (
-          let strand = 0;
-          strand < 3 && streamIndex < textStreams.length;
-          strand++
-        ) {
-          const x = mix(
-            glyph.bounds.min.x,
-            glyph.bounds.max.x,
-            (strand + 0.5) / 3,
-          );
-          const edge =
-            mix(-40, 85, melt) +
-            Math.sin(x * 0.23 + t * 2.1) * 4 +
-            Math.sin(x * 0.63 - t) * 2.1;
-          if (!inGlyph(glyph, x, edge + 1.5)) continue;
-          const a = glyph.mesh.localToWorld(V(x, edge + 2, 3));
-          const b = V(
-            a.x + Math.sin(glyph.order * 2.1 + strand) * 10,
-            -(floorY - sy),
-            7,
-          );
-          const thickness =
-            (1.4 + seed(glyph.order + strand) * 1.4) * textScale;
-          updateStream(
-            textStreams[streamIndex++],
-            a,
-            b,
-            smooth(0.07, 0.3, melt),
-            t,
-            thickness,
-          );
-        }
-      });
-    }
     const poolIn = smooth(5.2, 7.15, t),
       poolOut = smooth(7.7, 9.55, t);
     const poolAmount = poolIn * (1 - poolOut);
@@ -685,28 +549,6 @@ export function createCoffeeScene(
       dummy.updateMatrix();
       drops.setMatrixAt(dropCount++, dummy.matrix);
     };
-    if (t > 4.85 && t < 9.7 && !reduced) {
-      for (let i = 0; i < 75; i++) {
-        const fall = smooth(4.9 + seed(i) * 1.2, 7.2 + seed(i) * 0.2, t);
-        const gather = smooth(7.35 + seed(i) * 0.35, 9.25 + seed(i) * 0.4, t);
-        if (fall <= 0 || gather >= 1) continue;
-        const x = g.x + seed(i + 20) * g.w * 0.91;
-        const y = g.y + 25 + seed(i + 50) * g.h * 0.55;
-        const startX = mix(x, puddleX + (seed(i + 2) - 0.5) * g.w * 0.6, fall);
-        const startY = mix(y, floorY, fall * fall);
-        const end = potBody.localToWorld(V(0, 40, 0));
-        const gatherY =
-          mix(-(startY - sy), end.y, gather) + Math.sin(gather * Math.PI) * 45;
-        putDrop(
-          mix(startX, end.x, gather),
-          gatherY,
-          12,
-          (1.3 + seed(i + 4) * 2.4) * (1 - gather * 0.65),
-          1 + Math.sin(fall * Math.PI) * 2.5,
-        );
-      }
-    }
-
     cupModels.forEach((cup, index) => {
       const anchor = layout.cups[index];
       cup.group.visible = !!anchor;
@@ -833,6 +675,7 @@ export function createCoffeeScene(
       window.removeEventListener("resize", resizeHandler);
       motionQuery.removeEventListener("change", motionHandler);
       canvas.removeEventListener("webglcontextlost", contextLost);
+      greeting.dispose();
       resources.forEach((resource) => resource.dispose());
       environment.dispose();
       renderer.dispose();
