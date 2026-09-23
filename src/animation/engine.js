@@ -11,7 +11,7 @@ import {
 
 import { createBeanGreeting } from "./beanGreeting.js";
 import { createFlood } from "./flood.js";
-import { getSurfaceRivuletPoint, getOverflowGrowth } from "./overflow.js";
+import { getSurfaceRivuletPoint, getOverflowSheetPoint, getOverflowGrowth } from "./overflow.js";
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 const mix = THREE.MathUtils.lerp;
 const seed = (n) => {
@@ -73,7 +73,7 @@ export function createCoffeeScene(
   scene.add(fillLight);
 
   const coffee = new THREE.MeshPhysicalMaterial({
-    color: 0x35180a,
+    color: 0x24120a,
     metalness: 0.06,
     roughness: 0.19,
     clearcoat: 1,
@@ -81,7 +81,7 @@ export function createCoffeeScene(
     envMapIntensity: 0.9,
   });
   const darkCoffee = coffee.clone();
-  darkCoffee.color.set(0x180b04);
+  darkCoffee.color.set(0x110806);
   const crema = new THREE.MeshPhysicalMaterial({
     color: 0xbb8050,
     roughness: 0.36,
@@ -369,7 +369,27 @@ export function createCoffeeScene(
   }
   for (let i = 0; i < 7; i++) makeStream();
   const gatheringStream = makeStream();
-  const surfaceStreams = cupModels.map(() => [makeStream(), makeStream()]);
+  const overflowSheets = cupModels.map(() => {
+    const segments = 48;
+    const positions = new Float32Array((segments + 1) * 3 * 3);
+    const indices = [];
+    for (let i = 0; i < segments; i++) {
+      const row = i * 3;
+      for (let j = 0; j < 2; j++) {
+        indices.push(row + j, row + j + 3, row + j + 1);
+        indices.push(row + j + 1, row + j + 3, row + j + 4);
+      }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
+    geometry.setIndex(indices);
+    const material = darkCoffee.clone();
+    material.roughness = 0.28;
+    material.side = THREE.DoubleSide;
+    const object = mesh(geometry, material, scene);
+    object.frustumCulled = false;
+    return { object, positions, segments };
+  });
   const tangent = V(),
     normal = V(),
     binormal = V(),
@@ -444,6 +464,26 @@ export function createCoffeeScene(
     stream.object.geometry.computeVertexNormals();
   }
 
+  function updateOverflowSheet(sheet, cup, growth, t) {
+    sheet.object.visible = growth > 0.001;
+    if (!sheet.object.visible) return;
+    const matrix = cup.group.matrixWorld;
+    for (let i = 0; i <= sheet.segments; i++) {
+      const u = i / sheet.segments * growth;
+      for (let j = 0; j < 3; j++) {
+        const point = getOverflowSheetPoint(u, j - 1);
+        const wave = Math.sin(u * 25 - t * 7) * 0.35 * Math.sin(u * Math.PI);
+        center.set(point.x, point.y, point.z + wave).applyMatrix4(matrix);
+        const offset = (i * 3 + j) * 3;
+        sheet.positions[offset] = center.x;
+        sheet.positions[offset + 1] = center.y;
+        sheet.positions[offset + 2] = center.z;
+      }
+    }
+    sheet.object.geometry.attributes.position.needsUpdate = true;
+    sheet.object.geometry.computeVertexNormals();
+  }
+
   let layout = { cups: [], greeting: null, pot: null };
   let measured = false;
   let disposed = false;
@@ -467,9 +507,18 @@ export function createCoffeeScene(
   };
   function measure() {
     if (disposed) return;
-    renderer.setSize(innerWidth, innerHeight, false);
+    pageHeight = Math.max(document.documentElement.scrollHeight, innerHeight);
+    canvas.style.height = `${pageHeight}px`;
+    renderer.setPixelRatio(Math.min(
+      window.devicePixelRatio,
+      1.65,
+      renderer.capabilities.maxTextureSize / Math.max(innerWidth, pageHeight),
+      Math.sqrt(8_000_000 / (innerWidth * pageHeight)),
+    ));
+    renderer.setSize(innerWidth, pageHeight, false);
     camera.right = innerWidth;
-    camera.bottom = -innerHeight;
+    camera.top = scrollY;
+    camera.bottom = scrollY - pageHeight;
     camera.updateProjectionMatrix();
     layout = {
       greeting: rect(document.querySelector("[data-coffee-greeting]")),
@@ -489,7 +538,6 @@ export function createCoffeeScene(
       onFloodTime?.(0);
     }
     listSignature = signature;
-    pageHeight = document.documentElement.scrollHeight;
     flood.measure();
     measured = true;
   }
@@ -531,6 +579,11 @@ export function createCoffeeScene(
     if (now - lastRender < 25 && !reduced) return;
     lastRender = now;
     if (!measured) measure();
+    // DOM bounds still track layout changes; the canvas itself scrolls with
+    // the document, so the browser moves its pixels without waiting for RAF.
+    layout.greeting = rect(layout.greeting?.element);
+    layout.pot = rect(layout.pot?.element);
+    layout.cups = layout.cups.map((cup) => rect(cup.element));
     const t = reduced ? 40 : elapsed;
     onTime(elapsed);
     const phase = reduced ? "flowing" : getPhase(t);
@@ -542,6 +595,11 @@ export function createCoffeeScene(
     lastSimTime = elapsed;
     const flowTime = flowOrigin === null ? t : t - flowOrigin + 11.05;
     const sy = scrollY;
+    if (camera.top !== sy) {
+      camera.top = sy;
+      camera.bottom = sy - pageHeight;
+      camera.updateProjectionMatrix();
+    }
     const g = layout.greeting;
     const p = layout.pot;
     if (!g || !p) return;
@@ -568,7 +626,7 @@ export function createCoffeeScene(
     const lidLift = smooth(7.3, 7.8, t) * (1 - smooth(9.3, 9.8, t));
     lid.position.set(lidLift * 28, lidLift * 25, 0);
     lid.rotation.z = -lidLift * 0.28;
-    pot.visible = -pot.position.y > -180 && -pot.position.y < innerHeight + 180;
+    pot.visible = true;
     const potFill = reduced
       ? 0.13
       : mix(0.04, 0.72, smooth(7.8, 9.6, t)) *
@@ -714,7 +772,7 @@ export function createCoffeeScene(
       ? getFloodLevel(floodSeconds, reduced)
       : 0;
     const waterY = pageHeight * (1 - floodLevel) - 12 * floodLevel;
-    flood.update({ waterY, t, active: floodLevel > 0 });
+    flood.update({ waterY, pageHeight, t, active: floodLevel > 0 });
     canvas.dataset.floodLevel = floodLevel.toFixed(4);
     const levelLabel = document.querySelector("[data-coffee-level]");
     if (levelLabel) levelLabel.textContent = Math.round(floodLevel * 100) + "%";
@@ -724,20 +782,7 @@ export function createCoffeeScene(
       const anchor = layout.cups[i];
       const amount = anchor ? getCupState(flowTime, i, reduced).overflow : 0;
       const growth = getOverflowGrowth(amount);
-      for (let branch = 0; branch < 2; branch++) {
-        const stream = surfaceStreams[i][branch];
-        if (growth.branches > 0) {
-          updateStream(
-            stream,
-            V(),
-            V(),
-            growth.branches,
-            t,
-            3.5 * current.group.scale.x,
-            { surfaceGroup: current.group, side: branch === 0 ? -1 : 1 },
-          );
-        } else stream.object.visible = false;
-      }
+      updateOverflowSheet(overflowSheets[i], current, growth.branches, t);
       if (amount > 0) {
         const junction = getSurfaceRivuletPoint(1, 1);
         const a = current.group.localToWorld(

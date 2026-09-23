@@ -120,6 +120,16 @@
   color: #35372f !important;
   background: #f5f3ed;
 }
+.coffee-ink {
+  background-image: linear-gradient(
+    to bottom,
+    var(--coffee-dry-ink) 0 var(--coffee-cut),
+    #f2e6d5 var(--coffee-cut) 100%
+  );
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
 @media (max-width: 540px) {
   .pour-station {
     min-height: 116px;
@@ -734,9 +744,9 @@ select:focus-visible {
   background: linear-gradient(
     90deg,
     #ffffff90,
-    #84634455 14%,
-    #5a311adc 20%,
-    #704222e6 80%,
+    #3b281d77 14%,
+    #24150ee8 20%,
+    #332013ed 80%,
     #ffffffb0
   );
 }
@@ -745,8 +755,9 @@ select:focus-visible {
   display: block;
 }
 .coffee-canvas {
-  position: fixed;
-  inset: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
   z-index: 1;
   width: 100%;
   height: 100%;

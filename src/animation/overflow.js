@@ -16,6 +16,20 @@ export function getSurfaceRivuletPoint(progress, side) {
   return { x, y, z };
 }
 
+// The overflow is one filled ribbon across the front of the glass. Its edges
+// meet below the base, while the middle follows the curved glass surface.
+export function getOverflowSheetPoint(progress, across) {
+  const u = clamp(progress);
+  const edge = getSurfaceRivuletPoint(u, across < 0 ? -1 : 1);
+  const x = edge.x * Math.abs(across);
+  const radius = Math.hypot(edge.x, edge.z - 1.7);
+  return {
+    x,
+    y: edge.y,
+    z: Math.sqrt(Math.max(0, radius * radius - x * x)) + 2.5,
+  };
+}
+
 export function getOverflowGrowth(amount) {
   return {
     branches: smooth(0, 0.58, amount),
